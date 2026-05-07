@@ -300,3 +300,15 @@ python3 scripts/list_visible_sheets.py \
 | `--authorized-user` | 否 | authorized_user.json 路径 |
 
 **注意**：两个锚点的顺序（from/to）可互换，脚本会自动按 tab 视觉顺序截取范围。
+
+## 流水线衔接
+
+完成 `sync_low_assets.py` 同步、`output/low-asset-sheet-sync/sync_report.json` 写出后，**主流程完成 ≠ 会话终止**，按以下顺序继续：
+
+1. 把这次产出的关键交接信息以一段简短列表打印给用户：
+   - 操作的 Sheet URL + 处理 sheet tab 范围（from / to 锚点）
+   - 已插入待优化空行的 sheet tab 列表 + 每个 sheet 插入了多少行
+   - 跳过的 sheet 及原因
+2. 询问用户："本步已完成。是否继续调用 `ad-creative` 来给这些低表现行写新文案？"
+3. 等用户**明确**回复"继续 / 好 / yes / 调用下一步"或同义词，再调用同 plugin 内的 `ad-creative` skill（按 description 自动匹配，**不要**硬编码 `/<plugin>:<skill>` 命名空间形式）。把刚才同步的 Sheet URL、待优化 tab 列表 + 行号一起作为上下文传给 `ad-creative`。
+4. 若用户回复"暂停 / 不用 / 停 / 我自己看看"或同义词，则只汇报本步结果，不主动调下一个 skill，等待新指令。

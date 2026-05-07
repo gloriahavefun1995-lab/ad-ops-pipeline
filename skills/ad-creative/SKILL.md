@@ -406,3 +406,13 @@ node tools/clis/google-ads.js reports get --type ad_performance --date-range las
 - **ab-test-setup**: For structuring creative tests with statistical rigor
 - **marketing-psychology**: For psychological principles behind high-performing creative
 - **copy-editing**: For polishing ad copy before launch
+
+## 流水线收尾
+
+如果本 skill 是被同 plugin 内的 `低表现文案定位` 衔接调用进来的（即作为 ad-ops-pipeline 流水线的最后一环），完成生成新文案后：
+
+1. 告知用户："素材优化流水线已完成。新文案已经生成在 [输出位置：对话上下文里的 Sheet tab 行号 / CSV / 等具体说明]，请人工 review 后上传到投放平台或填回 sheet。"
+2. **不再主动询问下一步**——这是流水线终点。
+3. 如有未完成项（如某些低表现行无法生成、需要更多上下文），明确列出来让用户决定是补料再跑、还是跳过。
+
+如果是用户单独触发 ad-creative（不是通过流水线进来），按本 skill 原有流程汇报即可，无需上述收尾文字。

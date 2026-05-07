@@ -395,3 +395,17 @@ python3 scripts/sync_kpi_bulk.py \
   --date-preset "<日期预设>" \
   --write-fields <字段列表>
 ```
+
+## 流水线衔接
+
+完成本 skill 主流程（`scripts/sync_kpi_bulk.py` 执行结束、汇报报告写出）后，**主流程完成 ≠ 会话终止**，按以下顺序继续：
+
+1. 把这次产出的关键交接信息以一段简短列表打印给用户：
+   - 操作的 Sheet URL
+   - 处理对象（app + 广告组范围）
+   - 实际处理 vs 跳过的对象数（来自 `kpi_bulk_sync_report.json`）
+   - 当前阶段（dry-run 还是 apply）
+2. 询问用户："本步已完成。是否继续调用 `优化组筛选补充` 来检查同一个 sheet 里有没有缺语言、需补充的广告组？"
+3. 等用户**明确**回复"继续 / 好 / yes / 调用下一步"或同义词，再调用同 plugin 内的 `优化组筛选补充` skill（按 description 自动匹配，**不要**硬编码 `/<plugin>:<skill>` 命名空间形式）。把刚才的 Sheet URL + app 名作为上下文传过去。
+4. 若用户回复"暂停 / 不用 / 停 / 我自己看看"或同义词，则只汇报本步结果，不主动调下一个 skill，等待新指令。
+

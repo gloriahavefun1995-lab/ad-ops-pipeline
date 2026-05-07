@@ -407,12 +407,37 @@ node tools/clis/google-ads.js reports get --type ad_performance --date-range las
 - **marketing-psychology**: For psychological principles behind high-performing creative
 - **copy-editing**: For polishing ad copy before launch
 
+## 自动写回 Sheet：`scripts/write_creative.py`
+
+当本 skill 通过流水线（`低表现文案定位` → `ad-creative`）调用、需要把生成的 N 行新文案写回 Google Sheets 时，**优先用** `scripts/write_creative.py`，不要手写 `values.batchUpdate` 调用——脚本已经处理了所有 gotcha：
+
+- 自动识别每个 tab 的列结构（7 列英语 / 8 列含「翻译」），无需 agent 在代码里硬编码 7-vs-8 分支
+- CJK 字符数计算（zh/ja/ko ×2，符合 Google Ads RSA 规则）
+- 字符上限校验（Headline ≤30 / Description ≤90），超限直接 fail 不写入
+- 状态过渡：被填的"进行中"行自动改为"待确认"（与 kept-tab 习惯一致）
+- 数据周期默认填今日 M/D，可用 `--write-date` 覆盖
+- 一次 batchGet 拿全部 tab 的 layout，N 行写入用一次 batchUpdate（quota 友好）
+- `--dry-run` 先验证不写入
+
+输入 JSON 数组每条：
+```json
+{"tab":"159746413129-英语", "row":22, "asset_type":"Headline", "asset":"Try Claude Opus 4.7 Free", "strategy":"加入Claude Opus 4.7差异化角度"}
+{"tab":"195114642909-de", "row":19, "asset_type":"Headline", "asset":"Probleme lösen mit GPT-5.2", "translation":"Solve problems with GPT-5.2", "strategy":"GPT-5.2解决问题"}
+```
+
+调用：
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/ad-creative/scripts/write_creative.py \
+  --sheet-url "<URL>" --input creative.json [--dry-run] [--write-date 5/7]
+```
+
 ## 流水线收尾
 
 如果本 skill 是被同 plugin 内的 `低表现文案定位` 衔接调用进来的（即作为 ad-ops-pipeline 流水线的最后一环），完成生成新文案后：
 
-1. 告知用户："素材优化流水线已完成。新文案已经生成在 [输出位置：对话上下文里的 Sheet tab 行号 / CSV / 等具体说明]，请人工 review 后上传到投放平台或填回 sheet。"
-2. **不再主动询问下一步**——这是流水线终点。
-3. 如有未完成项（如某些低表现行无法生成、需要更多上下文），明确列出来让用户决定是补料再跑、还是跳过。
+1. 用 `scripts/write_creative.py` 把新文案 batch 写回 Sheet（先 `--dry-run` 确认 char limit / 列映射，再正式跑）
+2. 告知用户："素材优化流水线已完成。新文案已写入 sheet 的 N 个待优化行（C 列 Asset、D/E 列 翻译/优化思路、F 列 字符数、Performance=待确认、数据周期=<今日>）。请人工 review 后上传到投放平台。"
+3. **不再主动询问下一步**——这是流水线终点。
+4. 如有未完成项（如某些低表现行字符超限或语言不支持需要重写），明确列出来让用户决定是补料再跑、还是跳过。
 
 如果是用户单独触发 ad-creative（不是通过流水线进来），按本 skill 原有流程汇报即可，无需上述收尾文字。

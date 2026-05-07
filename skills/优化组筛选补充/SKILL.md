@@ -177,19 +177,23 @@ python3 scripts/analyze_excel.py \
 python3 scripts/update_sheets.py \
   --sheet-url "<Google Sheets URL>" \
   --groups '<JSON数组>' \
-  [--credentials "<凭证文件路径>"]
+  [--credentials "<凭证文件路径>"] \
+  [--name-style chinese|iso] \
+  [--skip-skeleton]
 ```
 
-`groups` 参数必须严格来自 `top_selected + supplements(found=true)`，每条格式为 `{"id": "<ad_group_id>", "lang_key": "<语言键>"}`。
+`groups` 参数必须严格来自 `top_selected + supplements(found=true)`，每条格式为 `{"id": "<ad_group_id>", "lang_key": "<语言键>"}`，可选添加 `lang_name` 显式指定中文语言名（否则自动从 `analyze_excel.py` 的 `LANG_SPECS` 取 `display_name`）。
 
 脚本对比 sheet 名称中的 ad group id，执行：
 
-- 不存在：新建 sheet，命名为 `{id}-{lang_key}`
-- 存在且可见：保持不动
+- 不存在：新建 sheet，命名为 `{id}-{中文语言名}`（默认；用 `--name-style iso` 切换为 `{id}-{lang_key}` 兼容老风格）。**新建后自动预置优化区结构**：R16 区段标题"优化方案&数据结果"（A:G 合并、浅蓝底、加粗），R17 表头（英语 7 列 / 其他 8 列含「翻译」列、浅灰底、加粗居中）。这样下游 `低表现文案定位` skill 能直接识别优化区，不再需要中间手工补表头。
+- 存在且可见：保持不动（不会重写优化区表头，避免覆盖用户已有内容）
 - 存在但隐藏：取消隐藏
 - 可见但不在本次收集组中：隐藏
 
 只针对名称中含 10 位以上数字 ID 的广告组 sheet 执行隐藏，不影响说明性 sheet。
+
+如不希望预置优化区结构（例如下游流程会自己重写），加 `--skip-skeleton`。
 
 ### Step 5：汇报结果
 

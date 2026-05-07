@@ -192,15 +192,54 @@ def main() -> int:
         for h in info.get("unknown_in_sheet", []):
             unknown_collector.setdefault(h, []).append(title)
 
+    needs_user_input = bool(unmapped_any) and bool(unknown_collector)
     consolidated = {
         "unmapped_keys_any_sheet": sorted(unmapped_any),
         "unmapped_display_labels": [KEY_TO_DISPLAY_LABEL.get(k, k) for k in sorted(unmapped_any)],
         "unknown_in_any_sheet": [
             {"header": h, "sheets": s} for h, s in sorted(unknown_collector.items())
         ],
-        "needs_user_input": bool(unmapped_any) and bool(unknown_collector),
+        "needs_user_input": needs_user_input,
         "has_required_field_gap": has_required_gap,
     }
+
+    # When the user/agent needs to make a mapping decision, surface concrete
+    # next-step guidance so they don't have to dig through README + script.
+    if needs_user_input:
+        suggestions = []
+        # Pick the most likely candidate header per unmapped purpose, preferring
+        # the most-shared header across sheets (highest sheet count).
+        candidates_sorted = sorted(
+            unknown_collector.items(),
+            key=lambda kv: (-len(kv[1]), kv[0]),
+        )
+        for purpose_key in sorted(unmapped_any):
+            display = KEY_TO_DISPLAY_LABEL.get(purpose_key, purpose_key)
+            if candidates_sorted:
+                top = candidates_sorted[0]
+                suggestions.append({
+                    "purpose_key": purpose_key,
+                    "display_label": display,
+                    "candidate_headers": [h for h, _ in candidates_sorted[:5]],
+                    "ask_user": (
+                        f"你的表里 `{display}` 列叫什么？候选：{', '.join(h for h, _ in candidates_sorted[:5])}（或回答\"无此列\"跳过）"
+                    ),
+                    "readme_edit_hint": (
+                        f"在低表现文案定位/README.md 的「字段名映射」表里把 `{display}` 行的「你的表格标题」列填上对应表头名。"
+                    ),
+                })
+        consolidated["resolution_hint"] = (
+            "存在未匹配的「用途字段」+ 无法识别的「实际表头」。"
+            "对每个 purpose_key 选一个候选表头（或确认无此列），在 README 字段映射里写入对应行后重跑本脚本。"
+        )
+        consolidated["suggestions"] = suggestions
+
+    if has_required_gap:
+        consolidated["resolution_hint_required"] = (
+            "必填字段（asset / strategy）在某个 sheet 完全缺失或所在 sheet 的优化区不存在。"
+            "若是「优化区域不存在」(error: Missing optimization section header)：可让该 sheet 跳过；"
+            "若是「优化区存在但缺必填列」：必须在表头里加上对应列，否则后续无法插入文案行。"
+        )
 
     output = {
         "readme_overrides_applied": overrides,

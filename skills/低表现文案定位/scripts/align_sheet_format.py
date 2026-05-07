@@ -1,13 +1,49 @@
 #!/usr/bin/env python3
 import argparse
+import functools
 import os
+import random
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+
+def _retry_429(method):
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        for attempt in range(6):
+            try:
+                return method(*args, **kwargs)
+            except APIError as e:
+                resp = getattr(e, "response", None)
+                code = getattr(resp, "status_code", None) if resp is not None else None
+                if code != 429 or attempt == 5:
+                    raise
+                wait = min(60, (2 ** attempt) * 5) + random.uniform(0, 1.5)
+                print(f"[429] quota exceeded on {method.__name__}; retry {attempt + 1}/5 after {wait:.1f}s",
+                      file=sys.stderr)
+                time.sleep(wait)
+    return wrapper
+
+
+_PATCH_TARGETS = (
+    (gspread.Worksheet, ("get_all_values", "update", "batch_update")),
+    (gspread.Spreadsheet, ("worksheets", "fetch_sheet_metadata", "values_batch_update")),
+    (gspread.http_client.HTTPClient, ("request", "values_get", "values_update", "batch_update")),
+)
+for cls, names in _PATCH_TARGETS:
+    for name in names:
+        original = getattr(cls, name, None)
+        if callable(original) and not getattr(original, "_retry_429_wrapped", False):
+            wrapped = _retry_429(original)
+            wrapped._retry_429_wrapped = True
+            setattr(cls, name, wrapped)
 
 
 SCOPES = [
@@ -140,6 +176,16 @@ def main() -> None:
         type=parse_plan,
         help="Formatting copy plan in worksheet:source_row:target_row format. Repeat for multiple rows.",
     )
+    parser.add_argument(
+        "--column-count",
+        type=int,
+        default=0,
+        help=(
+            "Skip the per-worksheet `get_all_values()` call (which costs one Sheets API "
+            "read just to compute row width) and use this column count instead. "
+            "When 0/unset, falls back to reading the worksheet to compute used columns."
+        ),
+    )
     args = parser.parse_args()
 
     credentials_path, token_path = resolve_google_workspace_credentials(
@@ -166,8 +212,12 @@ def main() -> None:
     requests: List[dict] = []
     for title, source_row, target_row in args.plan:
         worksheet = spreadsheet.worksheet(title)
-        used_column_count = max((len(row) for row in worksheet.get_all_values()), default=0)
-        end_column = used_column_count or worksheet.col_count
+        if args.column_count and args.column_count > 0:
+            # Caller already knows the used column count — skip the read.
+            end_column = args.column_count
+        else:
+            used_column_count = max((len(row) for row in worksheet.get_all_values()), default=0)
+            end_column = used_column_count or worksheet.col_count
         merges = merge_map.get(title, [])
         start_column = 1 if row_in_first_col_merge(source_row, merges) or row_in_first_col_merge(target_row, merges) else 0
         requests.extend(build_copy_requests(worksheet.id, source_row, target_row, start_column, end_column))

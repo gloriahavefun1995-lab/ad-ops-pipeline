@@ -10,19 +10,56 @@ language assets).
 """
 
 import argparse
+import functools
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+
+def _retry_429(method):
+    """Wrap a gspread method with exponential-backoff retry on HTTP 429 quota errors."""
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        for attempt in range(6):
+            try:
+                return method(*args, **kwargs)
+            except APIError as e:
+                resp = getattr(e, "response", None)
+                code = getattr(resp, "status_code", None) if resp is not None else None
+                if code != 429 or attempt == 5:
+                    raise
+                wait = min(60, (2 ** attempt) * 5) + random.uniform(0, 1.5)
+                print(f"[429] quota exceeded on {method.__name__}; retry {attempt + 1}/5 after {wait:.1f}s",
+                      file=sys.stderr)
+                time.sleep(wait)
+    return wrapper
+
+
+_PATCH_TARGETS = (
+    (gspread.Worksheet, ("get_all_values", "insert_row", "update", "batch_update")),
+    (gspread.Spreadsheet, ("worksheets", "fetch_sheet_metadata", "values_batch_update")),
+    (gspread.http_client.HTTPClient, ("request", "values_get", "values_update", "batch_update")),
+)
+for cls, names in _PATCH_TARGETS:
+    for name in names:
+        original = getattr(cls, name, None)
+        if callable(original) and not getattr(original, "_retry_429_wrapped", False):
+            wrapped = _retry_429(original)
+            wrapped._retry_429_wrapped = True
+            setattr(cls, name, wrapped)
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -48,26 +85,78 @@ CN_NUMS = _build_cn_num_map(50)
 NUM_TO_CN = {v: k for k, v in CN_NUMS.items()}
 
 OPTIMIZATION_HEADER_ALIASES = {
-    "asset_type": ["Asset type"],
-    "round": ["优化轮次"],
-    "perf": ["Performance"],
+    "asset_type": ["Asset type", "素材类型"],
+    "round": ["优化轮次", "对比方案", "轮次"],
+    "perf": ["Performance", "表现"],
     "rank": ["Cost排序", "消耗排名"],
     "rank_delta": ["Cost趋势"],
-    "ctr": ["Ctr", "CTR"],
-    "asset": ["Asset", "素材"],
+    "ctr": ["Ctr", "CTR", "点击率"],
+    "asset": ["Asset", "素材", "新文案"],
     "translation": ["翻译", "Translation"],
     "strategy": ["优化思路", "思路"],
-    "chars": ["字符数"],
-    "period": ["数据周期"],
+    "chars": ["字符数", "字数"],
+    "period": ["数据周期", "周期"],
 }
 
 SUMMARY_HEADER_ALIASES = {
-    "round": ["优化轮次"],
+    "round": ["优化轮次", "对比方案"],
     "bg_rate": ["Best/Good率", "Best&good率"],
     "count": ["优化组数"],
     "period": ["数据周期"],
     "remark": ["备注"],
 }
+
+# Map sheet-tab language suffix (中文 / ISO / region 变体) to canonical ISO 639-1 lang_key.
+# Used to (a) decide needs_translation and (b) emit a normalized lang_key in dry-run output
+# so downstream consumers don't need to repeat this mapping themselves.
+TITLE_SUFFIX_TO_LANG_KEY = {
+    # English
+    "英语": "en", "英文": "en", "en": "en", "us": "en", "gb": "en", "english": "en",
+    # Chinese
+    "中文": "zh", "中文简体": "zh", "中文繁体": "zh", "zh": "zh", "cn": "zh", "tw": "zh", "hk": "zh",
+    # Spanish
+    "西班牙语": "es", "西语": "es", "es": "es", "es-419": "es", "es-mx": "es", "spanish": "es",
+    # Portuguese
+    "葡语": "pt", "葡萄牙语": "pt", "巴西葡语": "pt", "pt": "pt", "pt-br": "pt", "ptbr": "pt", "portuguese": "pt",
+    # French
+    "法语": "fr", "法文": "fr", "fr": "fr", "french": "fr",
+    # German
+    "德语": "de", "de": "de", "german": "de",
+    # Arabic
+    "阿拉伯语": "ar", "ar": "ar", "arabic": "ar",
+    # Persian
+    "波斯语": "fa", "波斯文": "fa", "fa": "fa", "persian": "fa", "farsi": "fa",
+    # Japanese
+    "日语": "ja", "日文": "ja", "ja": "ja", "jp": "ja", "japanese": "ja",
+    # Korean
+    "韩语": "ko", "韩文": "ko", "ko": "ko", "kr": "ko", "korean": "ko",
+    # Indonesian
+    "印尼语": "id", "印度尼西亚语": "id", "id": "id", "indonesian": "id",
+    # Italian
+    "意大利语": "it", "意语": "it", "it": "it", "italian": "it",
+    # Polish
+    "波兰语": "pl", "pl": "pl", "polish": "pl",
+    # Russian
+    "俄语": "ru", "ru": "ru", "russian": "ru",
+    # Thai
+    "泰语": "th", "泰文": "th", "th": "th", "thai": "th",
+    # Turkish
+    "土耳其语": "tr", "tr": "tr", "turkish": "tr",
+    # Malay
+    "马来语": "ms", "马来文": "ms", "ms": "ms", "malay": "ms",
+    # Hindi
+    "印地语": "hi", "hi": "hi", "hindi": "hi",
+    # Vietnamese
+    "越南语": "vi", "vi": "vi", "vietnamese": "vi",
+}
+
+
+def normalize_lang_key(title_suffix: str) -> Optional[str]:
+    """Map a sheet tab's language suffix to its ISO 639-1 lang_key.  Returns None if unrecognized."""
+    if not title_suffix:
+        return None
+    s = title_suffix.strip().lower()
+    return TITLE_SUFFIX_TO_LANG_KEY.get(s) or TITLE_SUFFIX_TO_LANG_KEY.get(title_suffix.strip())
 
 # 用途列（README "字段名映射" 表第一列）→ alias key
 README_FIELD_LABEL_TO_KEY = {
@@ -941,10 +1030,18 @@ def find_helper_script(explicit_path: Optional[str], task_file: Optional[str]) -
     )
 
 
-def run_alignment(sheet_url: str, plans: List[Tuple[str, int, int]], helper: Path) -> None:
+def run_alignment(
+    sheet_url: str,
+    plans: List[Tuple[str, int, int]],
+    helper: Path,
+    column_count: Optional[int] = None,
+) -> None:
     if not plans:
         return
     cmd = ["python3", str(helper), "--sheet-url", sheet_url]
+    if column_count and column_count > 0:
+        # Save one Sheets API read per align invocation.
+        cmd.extend(["--column-count", str(column_count)])
     for title, source_row, target_row in plans:
         cmd.extend(["--plan", f"{title}:{source_row}:{target_row}"])
     subprocess.run(cmd, check=True)
@@ -1463,6 +1560,16 @@ def main() -> None:
     }
     approved_missing_sets: set = set()
 
+    # Incremental checkpoint: persist report to disk after every sheet processes,
+    # so a mid-run crash leaves a usable partial report instead of an empty one.
+    _report_path = OUTPUT_DIR / "sync_report.json"
+
+    def _checkpoint_report():
+        try:
+            _report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            print(f"[warn] checkpoint write failed: {exc}", file=sys.stderr)
+
     for title in target_titles:
         if requested_titles is not None and title not in requested_titles:
             continue
@@ -1516,6 +1623,7 @@ def main() -> None:
                     "format_aligned": False,
                 }
             )
+            _checkpoint_report()
             continue
 
         if kpi_status == KPI_STATUS_EMPTY_DATA:
@@ -1530,6 +1638,7 @@ def main() -> None:
                     "format_aligned": False,
                 }
             )
+            _checkpoint_report()
             continue
 
         _seen_assets: set = set()
@@ -1550,6 +1659,7 @@ def main() -> None:
                     "format_aligned": False,
                 }
             )
+            _checkpoint_report()
             continue
 
         values = ws.get_all_values()
@@ -1570,9 +1680,12 @@ def main() -> None:
 
         # Language extraction from sheet title suffix (after the first '-')
         title_suffix = title.split("-", 1)[1] if "-" in title else ""
-        en_markers = {"英语", "en", "us", "gb"}
-        zh_markers = {"中文", "zh", "cn", "tw", "hk"}
-        needs_translation = bool(title_suffix) and title_suffix not in en_markers and title_suffix not in zh_markers
+        normalized_lang = normalize_lang_key(title_suffix)
+        # needs_translation: any non-EN, non-ZH language (including unrecognized suffixes — best-effort assume need)
+        needs_translation = bool(title_suffix) and normalized_lang not in (None, "en", "zh")
+        # If suffix unrecognized, also default to needs_translation=True (safer than silently skipping)
+        if title_suffix and normalized_lang is None:
+            needs_translation = True
 
         if args.dry_run:
             # Plan-only: list candidates with mode (with_history vs no_history) without writing.
@@ -1599,6 +1712,7 @@ def main() -> None:
             report["sheets"].append({
                 "worksheet": title,
                 "language_suffix": title_suffix,
+                "lang_key": normalized_lang,
                 "needs_translation": needs_translation,
                 "kpi_source": kpi_source,
                 "kpi_status": kpi_status,
@@ -1607,12 +1721,26 @@ def main() -> None:
                 "missing_fields": continuable_missing,
                 "dry_run": True,
             })
+            _checkpoint_report()
             continue
+
+        # In-memory mirror of `values` — updated after each insert/write below
+        # to avoid repeated `ws.get_all_values()` calls inside the per-item loop.
+        # See refactor (#8): the previous design re-read full grid for every candidate
+        # which racked up reads quickly when running many sheets.
+        def _cache_insert_blank(idx_1based: int) -> None:
+            """Mirror `ws.insert_row(blank, index=idx)` in `values`."""
+            values.insert(idx_1based - 1, [""] * ws.col_count)
+
+        def _cache_write_row(idx_1based: int, row_values: List[str]) -> None:
+            """Mirror `write_single_row(ws, idx, row_values)` in `values`."""
+            while len(values) < idx_1based:
+                values.append([""] * ws.col_count)
+            values[idx_1based - 1] = list(row_values)
 
         inserted_rows_info = []
         for item in bottom_three:
-            # Re-read sheet state for each asset (may have shifted after previous insert)
-            values = ws.get_all_values()
+            # Refresh layout/col_map from in-memory cache (no API call)
             layout = detect_sheet_layout(values)
             opt_header = layout["optimization_header_row"]
             opt_end = layout["optimization_data_end"]
@@ -1644,6 +1772,7 @@ def main() -> None:
                 )
                 source_row_values = values[matched_row - 1]
                 ws.insert_row([""] * ws.col_count, index=matched_row + 1, inherit_from_before=True)
+                _cache_insert_blank(matched_row + 1)
                 row_values = [""] * ws.col_count
                 if asset_type_col is not None and len(source_row_values) > asset_type_col:
                     row_values[asset_type_col] = source_row_values[asset_type_col]
@@ -1665,7 +1794,8 @@ def main() -> None:
                     },
                 )
                 write_single_row(ws, matched_row + 1, row_values)
-                run_alignment(sheet_url, [(title, matched_row, matched_row + 1)], align_helper)
+                _cache_write_row(matched_row + 1, row_values)
+                run_alignment(sheet_url, [(title, matched_row, matched_row + 1)], align_helper, column_count=ws.col_count)
                 if col_map.get("rank_delta") is not None:
                     ensure_rank_delta_dropdown(
                         sheets_service, spreadsheet.id, title, ws.id,
@@ -1675,14 +1805,12 @@ def main() -> None:
                     extend_asset_type_merge_down_one_row(
                         sheets_service, spreadsheet.id, title, matched_row,
                     )
-                # Verify: original asset rows not lost
-                reread_values = ws.get_all_values()
-                reread_layout = detect_sheet_layout(reread_values)
-                reread_opt_end = reread_layout["optimization_data_end"]
+                # Verify on in-memory cache (we just inserted a blank row + wrote
+                # metadata; we did NOT touch any history rows, so before_count == after_count).
                 after_count = sum(
                     1
-                    for row_idx in range(opt_header + 1, reread_opt_end)
-                    if len(reread_values[row_idx - 1]) > asset_col and reread_values[row_idx - 1][asset_col].strip() == item["asset"]
+                    for row_idx in range(opt_header + 1, len(values) + 1)
+                    if len(values[row_idx - 1]) > asset_col and values[row_idx - 1][asset_col].strip() == item["asset"]
                 )
                 if after_count < before_count:
                     raise RuntimeError(f"History row count decreased for {item['asset']} in {title}")
@@ -1695,7 +1823,9 @@ def main() -> None:
                 # ---- NO HISTORY: insert 原方案 + empty optimization row ----
                 insert_anchor_row = last_nonempty_opt_row(values, opt_header, opt_end) + 1
                 ws.insert_row([""] * ws.col_count, index=insert_anchor_row, inherit_from_before=True)
+                _cache_insert_blank(insert_anchor_row)
                 ws.insert_row([""] * ws.col_count, index=insert_anchor_row + 1, inherit_from_before=True)
+                _cache_insert_blank(insert_anchor_row + 1)
                 original_row_idx = insert_anchor_row
                 new_row_idx = insert_anchor_row + 1
 
@@ -1728,6 +1858,7 @@ def main() -> None:
                     },
                 )
                 write_single_row(ws, original_row_idx, original_row)
+                _cache_write_row(original_row_idx, original_row)
 
                 optimization_source_row = find_reference_row(
                     values, opt_header, opt_end, asset_type_col, round_col,
@@ -1757,13 +1888,14 @@ def main() -> None:
                     },
                 )
                 write_single_row(ws, new_row_idx, new_row)
+                _cache_write_row(new_row_idx, new_row)
 
                 row_alignment_plans: List[Tuple[str, int, int]] = []
                 if original_source_row is not None:
                     row_alignment_plans.append((title, original_source_row, original_row_idx))
                 if optimization_source_row is not None:
                     row_alignment_plans.append((title, optimization_source_row, new_row_idx))
-                run_alignment(sheet_url, row_alignment_plans, align_helper)
+                run_alignment(sheet_url, row_alignment_plans, align_helper, column_count=ws.col_count)
 
                 copy_row_format_and_validation(
                     sheets_service, spreadsheet.id, ws.id,
@@ -1824,9 +1956,9 @@ def main() -> None:
                         original_row_idx, new_row_idx, item["type"],
                     )
 
-                # Verify: 原方案 row has original asset
-                reread_values = ws.get_all_values()
-                inserted_original = reread_values[original_row_idx - 1]
+                # Verify on in-memory cache (we just wrote item["asset"] to original_row_idx;
+                # if the API write failed we'd have got an exception above, so this is purely a sanity check).
+                inserted_original = values[original_row_idx - 1] if original_row_idx - 1 < len(values) else []
                 original_asset = inserted_original[asset_col].strip() if len(inserted_original) > asset_col else ""
                 if original_asset != item["asset"]:
                     raise RuntimeError(f"No-history placement verification failed for {item['asset']} in {title}")
@@ -1933,7 +2065,7 @@ def main() -> None:
                         range_name=f"A{next_summary_row}:{col_letter(ws.col_count)}{next_summary_row}",
                         values=[summary_row[: ws.col_count]],
                     )
-                    run_alignment(sheet_url, [(title, summary_last_row, next_summary_row)], align_helper)
+                    run_alignment(sheet_url, [(title, summary_last_row, next_summary_row)], align_helper, column_count=ws.col_count)
                     summary_written = True
                 else:
                     if not summary_skipped_reason:
@@ -1956,8 +2088,9 @@ def main() -> None:
             "best_good_rate": best_good_rate,
             "format_aligned": True,
         })
+        _checkpoint_report()
 
-    out_path = OUTPUT_DIR / "sync_report.json"
+    out_path = _report_path
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if args.verbose:

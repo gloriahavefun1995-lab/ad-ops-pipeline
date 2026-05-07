@@ -1,0 +1,4 @@
+interface:
+  display_name: "广告素材数据登记"
+  short_description: "Register last-round copy performance data from KPI into Google Sheets"
+  default_prompt: "Use this skill to register last-round ad copy performance data into Google Sheets. Read KPI backend asset metrics for an ad group and update the sheet with Performance, cost ranking, data period, and Best/Good rate. Confirm the status marker used to identify target rows (e.g. 待确认, 优化中, or 进行中). Prefer HTTP/API and script-based authentication, and use browser automation only as a fallback."

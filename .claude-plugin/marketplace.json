@@ -1,0 +1,11 @@
+{
+  "name": "zhaobo-ad-tools",
+  "owner": { "name": "zhaobo" },
+  "plugins": [
+    {
+      "name": "ad-ops-pipeline",
+      "source": "./",
+      "description": "投放素材文案优化流水线"
+    }
+  ]
+}

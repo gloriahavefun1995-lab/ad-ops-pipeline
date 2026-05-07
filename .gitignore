@@ -1,0 +1,16 @@
+# Runtime artifacts (regenerated on first run)
+**/output/
+**/kpi_session.json
+**/kpi_summary.json
+**/evals/evals.json
+
+# Chrome user profile (large, user-specific)
+**/chrome_user_data/
+
+# Python
+**/__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+**/.DS_Store

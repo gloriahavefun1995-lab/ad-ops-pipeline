@@ -1,0 +1,6 @@
+{
+  "name": "ad-ops-pipeline",
+  "version": "0.1.0",
+  "description": "投放素材文案优化流水线：从 Chrome 调试浏览器、KPI 后台拉数据，到筛选、登记、创意生成、优化组同步的 5 个 skill 套件。",
+  "author": { "name": "zhaobo" }
+}

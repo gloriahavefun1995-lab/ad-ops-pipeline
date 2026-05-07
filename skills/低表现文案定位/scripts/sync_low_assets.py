@@ -1773,6 +1773,31 @@ def main() -> None:
                     sheets_service, spreadsheet.id, ws.id,
                     optimization_source_row, new_row_idx, 1, ws.col_count,
                 )
+                # Defensive: guarantee perf and strategy are empty on the 原方案 row.
+                # Uses updateCells (not values.update) to reliably clear cells after
+                # all format/validation copy operations.
+                _orig_clear_reqs = []
+                for _f in ("perf", "strategy"):
+                    _ci = col_map.get(_f)
+                    if _ci is not None:
+                        _orig_clear_reqs.append({
+                            "updateCells": {
+                                "range": {
+                                    "sheetId": ws.id,
+                                    "startRowIndex": original_row_idx - 1,
+                                    "endRowIndex": original_row_idx,
+                                    "startColumnIndex": _ci,
+                                    "endColumnIndex": _ci + 1,
+                                },
+                                "rows": [{"values": [{}]}],
+                                "fields": "userEnteredValue",
+                            }
+                        })
+                if _orig_clear_reqs:
+                    sheets_service.spreadsheets().batchUpdate(
+                        spreadsheetId=spreadsheet.id,
+                        body={"requests": _orig_clear_reqs},
+                    ).execute()
                 if col_map.get("perf") is not None:
                     copy_cell_format_and_validation(
                         sheets_service, spreadsheet.id, ws.id,

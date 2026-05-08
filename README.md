@@ -35,9 +35,28 @@ claude --plugin-dir <本仓库本地路径>
 
 之后无论是 CLI、Desktop app、IDE 扩展都能用。`/plugin marketplace update` 可以拉取后续更新。
 
-### 其他 agent（Codex / OpenCode 等）
+### 方式 C：Codex / OpenCode（手动软链）
 
-`/plugin marketplace add/install` 是 Claude Code 专属机制，其他 agent 不识别。直接用 skill-man 源：把 `~/.skill-man/skills/` 下这 5 个 skill 软链或复制到对应 agent 的 skills 路径即可。skill 脚本本身跨平台，凭证路径会自动按 `$CODEX_HOME/credentials/google-workspace/...` → `~/.codex/credentials/google-workspace/...` → `~/.claude/credentials/google-workspace/...` 顺序回退，无需改脚本。跨平台 skills 路径速查见 `~/.claude/skills/neat-freak/references/agent-paths.md`。
+`/plugin marketplace` 是 Claude Code 专属机制，Codex / OpenCode 不识别，需要手动把 skills 软链到自家路径：
+
+```bash
+# 1. 克隆本仓库到任意位置
+git clone https://github.com/gloriahavefun1995-lab/ad-ops-pipeline.git
+cd ad-ops-pipeline
+
+# 2. 软链 5 个 skill 到 Codex skills 目录
+mkdir -p ~/.codex/skills
+for s in ad-creative chrome-launcher-with-userdata 优化文案表现登记 优化组筛选补充 低表现文案定位; do
+  ln -sf "$(pwd)/skills/$s" ~/.codex/skills/"$s"
+done
+
+# 3. 后续更新
+git pull   # 仓库一更新，软链自动跟上，无需重装
+```
+
+OpenCode 用户把目标目录换成 `~/.config/opencode/skills/` 即可（OpenCode 也会扫描 `~/.codex/skills/` 和 `~/.claude/skills/`，所以装在任一路径下都能用）。
+
+skill 脚本跨平台，凭证路径自动按 `$CODEX_HOME/credentials/google-workspace/...` → `~/.codex/credentials/google-workspace/...` → `~/.claude/credentials/google-workspace/...` 顺序回退，无需改脚本。
 
 ## 外部依赖（团队成员需自备）
 

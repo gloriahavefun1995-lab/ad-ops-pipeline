@@ -14,3 +14,6 @@
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Local-only state for skill-man sync (per-machine timestamp)
+.last-skillman-sync

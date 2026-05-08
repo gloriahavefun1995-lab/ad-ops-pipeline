@@ -27,6 +27,7 @@ description: 查询 KPI 数据，筛选低表现广告素材，并在 Google She
 - `scripts/capture_kpi_cookie_cdp.py` — 从已登录的 Chrome 导出 KPI session JSON 的辅助脚本
 - `scripts/list_visible_sheets.py` — 查询两个锚点之间的**可见** sheet 列表（自动过滤隐藏 sheet）
 - `scripts/detect_unknown_headers.py` — 启动 sync 前的**强制前置**：检测目标 sheet 表头与已知字段别名的对应关系，输出哪些"用途"无匹配、哪些表头未识别（详见工作流程 1.7）
+- `scripts/refresh_app_id_map.py` — 当 `references/app-id-map.json` 为空时，凭 `capture_kpi_cookie_cdp.py` 导出的 session 自动从 KPI 后台拉取全部有权限的 app 并合并写入；自动发现失败时打印手动补全提示而不是崩溃（详见工作流程 0）
 
 主运行脚本：
 - `scripts/sync_low_assets.py` — 此 skill 唯一的用户入口

@@ -48,6 +48,38 @@ claude --plugin-dir <本仓库本地路径>
 
 修改任意 SKILL.md / 脚本后，在已加载本 plugin 的 Claude Code 会话里 `/reload-plugins` 即可热更，不必重启。
 
+### 从 `~/.skill-man/skills/` 拉上游更新
+
+本 plugin 的 5 个 skill 是从 `~/.skill-man/skills/<name>/` **复制**来的（不是软链），所以 skill-man 那边的更新**不会自动**进入本仓库。需要手动同步：
+
+```bash
+# 1. 预览将带过来的变更（永远先跑这个）
+scripts/sync-from-skillman.sh --dry-run
+
+# 2. 确认无误后正式同步（交互式确认）
+scripts/sync-from-skillman.sh
+
+# 3. 检查 git diff、commit、push
+git diff
+git add -A && git commit -m "Sync from skill-man" && git push
+```
+
+约定：
+
+- skill-man 是**上游**，单向同步 skill-man → plugin。脚本不会删除 plugin-only 文件（如 `write_creative.py`、`refresh_app_id_map.py`），所以反复跑是安全的。
+- 如果你**直接在 plugin 里**改了文件（像 commit 872a4bc 那次），要先把改动**手动倒灌回 skill-man**，否则下次同步会把 plugin 的新版盖掉。预览输出会清楚显示哪些 plugin 文件会被覆盖——看到不对就 abort。
+- runtime 杂物（`output/`、`kpi_session.json`、`chrome_user_data/`、`__pycache__/` 等）已在脚本里 exclude，不会被搬过来。
+
+#### Pre-commit 提醒（可选但推荐）
+
+每台机器克隆完仓库后跑一次：
+
+```bash
+scripts/install-git-hooks.sh
+```
+
+之后每次 `git commit` 时，hook 会扫一遍 `~/.skill-man/skills/` 是否有比上次同步更新的文件，有就在 stderr 提醒——但不会阻塞 commit，只是告诉你"或许该先跑一下 sync"。`.last-skillman-sync` 是每台机器自己的时间戳文件，已在 `.gitignore` 里。
+
 ## 内部约定
 
 - SKILL.md 里所有 `scripts/...` 路径都相对于该 SKILL.md 所在目录；脚本调用前 Claude 会先 `cd` 到 skill 目录。

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Warn (don't block) when ~/.skill-man/skills/<5 skills> has files newer than
+# the last sync recorded in .last-skillman-sync. Exits 0 either way.
+
+PLUGIN_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+TIMESTAMP_FILE="$PLUGIN_ROOT/.last-skillman-sync"
+SKILLMAN_ROOT="$HOME/.skill-man/skills"
+
+SKILLS=(
+  "ad-creative"
+  "chrome-launcher-with-userdata"
+  "优化文案表现登记"
+  "优化组筛选补充"
+  "低表现文案定位"
+)
+
+[[ -d "$SKILLMAN_ROOT" ]] || exit 0
+
+if [[ ! -f "$TIMESTAMP_FILE" ]]; then
+  cat >&2 <<'EOF'
+⚠ ad-ops-pipeline: 从未跑过 skill-man → plugin 同步。
+   如果 ~/.skill-man/skills 里有上游更新需要带进来，先跑：
+     scripts/sync-from-skillman.sh
+   （commit 不会被阻塞，这只是提醒）
+EOF
+  exit 0
+fi
+
+NEWER_COUNT=0
+SAMPLE=""
+for skill in "${SKILLS[@]}"; do
+  src="$SKILLMAN_ROOT/$skill"
+  [[ -d "$src" ]] || continue
+  while IFS= read -r f; do
+    NEWER_COUNT=$((NEWER_COUNT + 1))
+    [[ -z "$SAMPLE" ]] && SAMPLE="$f"
+  done < <(find "$src" \
+              -type f \
+              -newer "$TIMESTAMP_FILE" \
+              -not -path '*/__pycache__/*' \
+              -not -name '*.pyc' \
+              -not -name '.DS_Store' \
+              -not -path '*/chrome_user_data/*' \
+              -not -name 'kpi_session.json' \
+              -not -name 'kpi_summary.json' \
+              -not -path '*/output/*' \
+              -not -path '*/evals/evals.json' \
+              2>/dev/null)
+done
+
+if [[ $NEWER_COUNT -gt 0 ]]; then
+  cat >&2 <<EOF
+⚠ ad-ops-pipeline: ~/.skill-man/skills 有 $NEWER_COUNT 个文件比上次同步新。
+   上次同步：$(cat "$TIMESTAMP_FILE")
+   示例：$SAMPLE
+   要不要先跑 scripts/sync-from-skillman.sh 再 commit？
+   （commit 不会被阻塞，这只是提醒）
+EOF
+fi
+
+exit 0

@@ -35,6 +35,10 @@ claude --plugin-dir <本仓库本地路径>
 
 之后无论是 CLI、Desktop app、IDE 扩展都能用。`/plugin marketplace update` 可以拉取后续更新。
 
+### 其他 agent（Codex / OpenCode 等）
+
+`/plugin marketplace add/install` 是 Claude Code 专属机制，其他 agent 不识别。直接用 skill-man 源：把 `~/.skill-man/skills/` 下这 5 个 skill 软链或复制到对应 agent 的 skills 路径即可。skill 脚本本身跨平台，凭证路径会自动按 `$CODEX_HOME/credentials/google-workspace/...` → `~/.codex/credentials/google-workspace/...` → `~/.claude/credentials/google-workspace/...` 顺序回退，无需改脚本。跨平台 skills 路径速查见 `~/.claude/skills/neat-freak/references/agent-paths.md`。
+
 ## 外部依赖（团队成员需自备）
 
 | 依赖 | 用途 | 怎么准备 |

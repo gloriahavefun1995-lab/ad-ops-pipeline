@@ -91,6 +91,35 @@ def char_count(text: str, tab: str) -> int:
     return n
 
 
+def chars_formula(tab: str, asset_col_letter: str, row: int) -> str:
+    """Build a sheet formula for the 字符数 cell so it auto-updates when the
+    Asset cell is later edited.
+
+    For non-CJK tabs (en, es, fr, de, pt, ar, fa …): plain ``=LEN(<cell>)``.
+
+    For CJK tabs (zh / ja / ko): a compound formula that replicates Google
+    Ads' double-counting of CJK characters:
+
+        =2*LEN(<cell>) - LEN(REGEXREPLACE(<cell>, "[CJK ranges]", ""))
+
+    Math:
+      - LEN counts every char as 1 (including CJK)
+      - REGEXREPLACE strips CJK chars; residual length = non-CJK char count
+      - 2*LEN - non_cjk_count = non_cjk_count + 2*cjk_count
+        which is exactly the Google Ads tally.
+
+    The CJK character class uses literal range endpoints to avoid escape-
+    sequence ambiguity in Sheets RE2:
+      - Hiragana/Katakana   U+3040-U+30FF  (぀ - ヿ)
+      - CJK Unified         U+4E00-U+9FFF  (一 - 鿿)
+      - Hangul Syllables    U+AC00-U+D7AF  (가 - 힯)
+    """
+    cell = f"{asset_col_letter}{row}"
+    if not _looks_like_cjk_tab(tab):
+        return f"=LEN({cell})"
+    return f'=2*LEN({cell})-LEN(REGEXREPLACE({cell},"[぀-ヿ一-鿿가-힯]",""))'
+
+
 def get_spreadsheet_id(url: str) -> str:
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
     if not m:
@@ -223,6 +252,12 @@ def main() -> int:
         col_map = layout["col_map"]
         col_count = layout["col_count"]
 
+        # Asset column letter is shared per tab (col_map is per-tab).
+        # If `asset` column is missing, fall back to "C" so the formula still parses
+        # (it'll reference an empty cell and just return 0); but in practice the
+        # detect_col_map step would have already failed earlier if asset were absent.
+        asset_col_letter = chr(65 + col_map["asset"]) if col_map.get("asset") is not None else "C"
+
         for it in items_list:
             row_idx = it["row"]
             # Build a row write that only updates specific columns; preserve the rest.
@@ -231,10 +266,12 @@ def main() -> int:
             for i in range(min(col_count, len(existing))):
                 row_values[i] = existing[i]
 
+            # 字符数：写公式而不是字面值 —— Asset 单元格之后被改时字符数会自动跟着重算。
+            # USER_ENTERED 模式下 Sheets 把 "=" 开头的字符串当公式解析。
             updates: Dict[str, str] = {
                 "asset": it["asset"],
                 "strategy": it.get("strategy", ""),
-                "chars": str(it["__char_count"]),
+                "chars": chars_formula(tab, asset_col_letter, row_idx),
                 "perf": args.perf_after,
                 "period": write_date,
             }

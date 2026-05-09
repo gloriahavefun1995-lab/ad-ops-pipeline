@@ -244,6 +244,10 @@ KPI_STATUS_INVALID_PAYLOAD = "invalid_payload"
 KPI_SOURCE_DATA_DIR = "kpi_data_dir"
 KPI_SOURCE_SESSION = "kpi_session"
 
+# 新建 tab（全 no_history）写完后，若优化区域内 原方案 + 新增 行总数低于此阈值，
+# 自动追加 "新增" 占位行至此数。kept tab 不受此影响。
+MIN_ASSET_ROWS_FOR_NEW_SHEET = 10
+
 # ---------------------------------------------------------------------------
 # Utility helpers
 # ---------------------------------------------------------------------------
@@ -2010,6 +2014,88 @@ def main() -> None:
                             if len(prev) > f_asset_col and prev[f_asset_col].strip() == asset_text:
                                 entry["inserted_at"] = r_idx
 
+        # ---- PAD-TO-10 (仅全 no_history 的新建 tab) ----
+        # 如果本 tab 这次写的所有素材都是 no_history（即新建 tab 第一次同步），
+        # 且优化区域内 原方案 + 新增 行总数 < MIN_ASSET_ROWS_FOR_NEW_SHEET，
+        # 在最后一个非空优化行之后追加 "新增" 占位行。
+        # kept tab（含 with_history）不进入此分支。
+        padded_count = 0
+        if inserted_rows_info and all(e.get("mode") == "no_history" for e in inserted_rows_info):
+            pad_values = ws.get_all_values()
+            pad_layout = detect_sheet_layout(pad_values)
+            pad_opt_header = pad_layout["optimization_header_row"]
+            pad_opt_end = pad_layout["optimization_data_end"]
+            pad_col_map = build_col_map(pad_values[pad_opt_header - 1], OPTIMIZATION_HEADER_ALIASES)
+            pad_round_col = pad_col_map.get("round")
+            pad_asset_type_col = pad_col_map.get("asset_type")
+
+            if pad_round_col is not None:
+                # 统计 原方案 + 新增 行数；同时记下最后一个 原方案 行号供格式继承
+                yuanfangan_rows = []
+                for r_idx in range(pad_opt_header + 1, pad_opt_end + 1):
+                    if r_idx > len(pad_values):
+                        break
+                    row = pad_values[r_idx - 1]
+                    if len(row) > pad_round_col:
+                        round_value = row[pad_round_col].strip()
+                        if round_value in ("原方案", "新增"):
+                            yuanfangan_rows.append((r_idx, round_value))
+
+                existing_count = len(yuanfangan_rows)
+                if existing_count < MIN_ASSET_ROWS_FOR_NEW_SHEET:
+                    pad_count = MIN_ASSET_ROWS_FOR_NEW_SHEET - existing_count
+                    last_yuanfangan_row_idx = next(
+                        (r_idx for r_idx, rv in reversed(yuanfangan_rows) if rv == "原方案"),
+                        None,
+                    )
+                    inherited_asset_type = ""
+                    if last_yuanfangan_row_idx is not None and pad_asset_type_col is not None:
+                        ref_row = pad_values[last_yuanfangan_row_idx - 1]
+                        if len(ref_row) > pad_asset_type_col:
+                            inherited_asset_type = ref_row[pad_asset_type_col].strip()
+
+                    # 同步本地 cache 与 worksheet 状态：用 in-memory 镜像 values
+                    values = pad_values
+                    insert_anchor = last_nonempty_opt_row(values, pad_opt_header, pad_opt_end) + 1
+
+                    for k in range(pad_count):
+                        target_row = insert_anchor + k
+                        ws.insert_row(
+                            [""] * ws.col_count,
+                            index=target_row,
+                            inherit_from_before=True,
+                        )
+                        _cache_insert_blank(target_row)
+
+                        pad_row_values = [""] * ws.col_count
+                        pad_row_values = set_row_values(
+                            pad_row_values, pad_col_map,
+                            {
+                                "asset_type": inherited_asset_type,
+                                "round": "新增",
+                                # 其它字段全留空：asset / translation / strategy / chars /
+                                # perf / rank_num / rank_delta / ctr / period
+                            },
+                        )
+                        write_single_row(ws, target_row, pad_row_values)
+                        _cache_write_row(target_row, pad_row_values)
+
+                        # 从最后一个 原方案 行复制格式 + dataValidation
+                        # （字体颜色、Performance dropdown、边框、字号都跟着过来）
+                        if last_yuanfangan_row_idx is not None:
+                            copy_row_format_and_validation(
+                                sheets_service, spreadsheet.id, ws.id,
+                                last_yuanfangan_row_idx, target_row, 1, ws.col_count,
+                            )
+                        padded_count += 1
+
+                        inserted_rows_info.append({
+                            "asset": "",  # 占位行，没有 asset 文本
+                            "mode": "padded_new",
+                            "original_at": target_row,
+                            "optimization_at": None,
+                        })
+
         # ---- SUMMARY ROW ----
         values = ws.get_all_values()
         layout = detect_sheet_layout(values)
@@ -2076,6 +2162,7 @@ def main() -> None:
         report["sheets"].append({
             "worksheet": title,
             "optimized": len(inserted_rows_info),
+            "padded_new_rows": padded_count,
             "kpi_source": kpi_source,
             "kpi_status": kpi_status,
             "kpi_error": kpi_error,

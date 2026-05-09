@@ -87,10 +87,15 @@ def build_optimization_skeleton_requests(sheet_id: int, has_translation: bool) -
     Layout:
       R16: '优化方案&数据结果' (区段标题, A:G 合并, 浅蓝底 #cad9f7, 加粗)
       R17: 表头 — 7 列 (no translation) 或 8 列 (with translation), 浅灰底 #f3f3f3, 加粗居中
+      R18+: 数据区基础格式 (灰字 #5f5f5f / Helvetica Neue / 11pt / 左对齐)
+            + Performance 列 (col G or F) 下拉验证 ["Low","Good","Best","进行中","待确认"]
 
     The 区段标题 merges A:G to match the existing kept-tab convention; the
     optional 翻译 column (D) when present extends the data rows but the
     section title row keeps its A:G merge.
+
+    数据区格式 + Performance dropdown 让下游 `低表现文案定位` 插入新行时，
+    格式天然继承自这个预设范围，不再依赖参考行复制。
     """
     if has_translation:
         header_row = ["Asset type", "对比方案", "Asset", "翻译", "优化思路", "字符数", "Performance", "数据周期"]
@@ -167,6 +172,61 @@ def build_optimization_skeleton_requests(sheet_id: int, has_translation: bool) -
                 "textFormat": {"bold": True, "fontSize": 11},
             }},
             "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
+        }
+    })
+
+    # ── 数据区基础格式 (R18:R1000) ─────────────────────────────────────
+    # 让下游 `低表现文案定位` 插入的行天然继承字体颜色 / 字号 / 对齐，跟
+    # kept tab 视觉一致（gray #5f5f5f, Helvetica Neue, 11pt, 左对齐）。
+    # 实测一个 kept tab (159746412889-西班牙语) R19+ 的 effectiveFormat 抄过来。
+    data_text_color = {"red": 0.37254903, "green": 0.37254903, "blue": 0.37254903}
+    requests.append({
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 17, "endRowIndex": 1000,
+                "startColumnIndex": 0, "endColumnIndex": col_count,
+            },
+            "cell": {"userEnteredFormat": {
+                "textFormat": {
+                    "foregroundColor": data_text_color,
+                    "fontFamily": "Helvetica Neue",
+                    "fontSize": 11,
+                },
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "BOTTOM",
+                "wrapStrategy": "OVERFLOW_CELL",
+            }},
+            "fields": "userEnteredFormat(textFormat.foregroundColor,textFormat.fontFamily,textFormat.fontSize,horizontalAlignment,verticalAlignment,wrapStrategy)",
+        }
+    })
+
+    # ── Performance 列下拉 (R18:R1000) ─────────────────────────────────
+    # 实测 kept tab 的实际下拉值是 ["Low","Good","Best","进行中","待确认"]
+    # （不含 "Learning"）；strict=True 限制只能选这 5 个。
+    perf_col_idx = 6 if has_translation else 5  # G or F (0-indexed)
+    requests.append({
+        "setDataValidation": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 17, "endRowIndex": 1000,
+                "startColumnIndex": perf_col_idx,
+                "endColumnIndex": perf_col_idx + 1,
+            },
+            "rule": {
+                "condition": {
+                    "type": "ONE_OF_LIST",
+                    "values": [
+                        {"userEnteredValue": "Low"},
+                        {"userEnteredValue": "Good"},
+                        {"userEnteredValue": "Best"},
+                        {"userEnteredValue": "进行中"},
+                        {"userEnteredValue": "待确认"},
+                    ],
+                },
+                "strict": True,
+                "showCustomUi": True,
+            },
         }
     })
 
